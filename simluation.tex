@@ -1,0 +1,271 @@
+\documentclass{article}
+\usepackage{algpseudocode}
+\usepackage{algorithm}
+\begin{document}
+
+The following pseudo-code blocks summarize a typical \textit{MIRGE-Com} simulation application for a viscous, reactive gas mixture.
+
+\section{Simulation Infrastructure}
+Constructs provided (mostly) by \textit{MIRGE-Com}.
+
+\subsection{Simulation Driver}
+The simulation driver construct is where the simulation execution begins and ends. Is is the so-called \textit{main} routine from which all others are called.  The simulation driver is typically written wholly by the domain user using pre-built pieces provided by the \textit{MIRGE-Com} library.
+
+For simplicity of illustration, the driver control-flow is presented here as a library-provided construct, where the user-written pieces further customize the simulation. Those user-written pieces are shown here in bold.  Two abstract user-written constructs executed as part of the driver are:
+\begin{itemize}
+\item \textbf{User\_Init} - abstract construct that initializes the simulation from scratch, or from restart files, setting up the initial condition, boundary conditions, and current simulation epoch.
+\item \textbf{User\_Finalize} - abstract construct that finalizes the simulation, performing, for example, a save of the final state.
+\end{itemize}
+
+The remaining user-written functions are further explained in dedicated sections to follow.
+
+%Simulation driver:
+%----------------------------
+%CV_0, DV_0, n, t = User_Init()
+%tseed = DV_0.temperature
+%[CV_n, tseed_n] --> [CV_0, tseed]
+%[CV_nfin, tseed_nfin] = Stepper(t, n, [CV_n, tseed_n], User_RHS, User_PreStep, User_PostStep)
+%# Save final state
+%User_Finalize()
+%----------------------------
+\begin{algorithm}
+  \caption{Simulation Driver}
+  \begin{algorithmic}[1]
+    \State $CV_0, DV_0, TV_0, n, t, t_{final}, dt \gets \mathbf{User\_Init()}$ 
+    \State $Tseed_0 \gets DV_0.{temperature}$
+    \State $S_0 \gets [CV_0, Tseed_0]$
+    \State $S_n \gets \Call{Stepper}{t, t_{final}, n, dt, S_0, \mathbf{User\_RHS}, \mathbf{User\_PreStep}, \mathbf{User\_PostStep}}$
+    \State $[CV_n, Tseed_n] \gets S_n$
+    \State $DV_n \gets \Call{EOS}{CV_n, Tseed_n}$
+    \State $TV_n \gets \Call{Transport}{CV_n, DV_n}$
+    \State $\mathbf{User\_Finalize()}$\Comment{save final state}
+  \end{algorithmic}
+\end{algorithm}
+
+The general simulation state is represented by $S$, and the domain-specific simulation quantities are as follows:
+\begin{itemize}
+\item{CV} - vector of fluid conserved quantities $(\rho, \rho\vec{V}, \rho{E}, \rho{Y}_\alpha)$
+\item{DV} - vector of fluid state-dependent quantities, e.g., \textit{pressure}, \textit{temperature}, \textit{sound speed}
+\item {TV} - vector of transport properties, e.g., \textit{viscosity}, \textit{species diffusivities}
+\item {Tseed} - a mechanism for propagating the fluid temperature from the last step in order to \textit{seed} subsequent temperature calculations.
+\end{itemize}
+
+Two domain-specific constructs that are not detailed here are the \textit{EOS} and \textit{Transport} constructs.  These are fluid model-specific constructs that are also provided by the user.
+
+\subsection{Simulation Stepper}
+This library-provided routine marches the simulation state $S$ forward in time using the user's chosen time integration method, and user-provided pre-and-post-step utilities, and RHS.
+
+% Stepper(t, dt_n, n, [CV_n, tseed_n], User_RHS, User_PreStep, User_PostStep) 
+% ----------------------------
+% while t_n < t_final:
+%    [CV_n, tseed_n], dt_n = User_PreStep(t_n, dt_n, [CV_n, tseed_n])
+%    [CV_(n+1), tseed_(~)] = Time_Integrator(t_n, dt_n, User_RHS, [CV_n, tseed_n])
+%    t_n --> t_n + dt_n
+%    [CV_(n+1), tseed_(n+1)], dt_(n+1) = User_PostStep(t_n, dt_n, [CV_(n+1), tseed_(~)])
+%    # update step counter
+%    [ n --> n+1 ]
+% ----------------------------
+\begin{algorithm}
+  \caption{Stepper}
+  \begin{algorithmic}[1]
+    \Procedure{Stepper}{$t, t_{final}, dt, n, S_n, \mathbf{RHS}, \mathbf{PreStep}, \mathbf{PostStep}$}
+    \While{$t < t_{final}$}
+    \State $S_n, dt \gets \Call{PreStep}{n, t, dt, S_n}$
+    \State $S_{n+1} \gets \Call{TimeIntegrator}{t, dt, S_n, \mathbf{RHS}}$
+    \State $t \gets t + dt$
+    \State $n \gets n + 1$
+    \State $S_{n+1}, dt \gets \Call{PostStep}{n, t, dt, S_{n+1}}$
+    \State $S_n \gets S_{n+1}$
+    \EndWhile
+    \EndProcedure  \end{algorithmic}
+\end{algorithm}
+
+\subsection{Time Integrators}
+A collection of time integrators are provided by \textit{MIRGE-Com}. 
+%(RK4) Time_Integrator(t, dt, User_RHS, [CV, tseed]):
+%----------------------------
+%    k1 = User_RHS(t, [CV, tseed])
+%    k2 = User_RHS(t+dt/2, [CV, tseed] + dt*k1/2)
+%    k3 = User_RHS(t+dt/2, [CV, tseed] + dt*k2/2)
+%    k4 = User_RHS(t, [CV + dt*k3, tseed])
+%    return [CV, tseed] + dt*(k1 + 2*k2 + 2*k3 + k4)/6
+%----------------------------
+\begin{algorithm}
+  \caption{RK4 Time Integrator}
+  \begin{algorithmic}[1]
+    \Procedure{TimeIntegrator}{$t, dt, S, \mathbf{RHS}$}
+    \State $k1 \gets \Call{RHS}{t, S}$
+    \State $k2 \gets \Call{RHS}{t + \frac{dt}{2}, S + \frac{dt}{2}k1}$
+    \State $k3 \gets \Call{RHS}{t + \frac{dt}{2}, S + \frac{dt}{2}k2}$
+    \State $k4 \gets \Call{RHS}{t, S + dt~k3}$
+    \State \Return $S + dt\frac{\left(k1 + 2k2 + 2k3 + k4\right)}{6}$
+    \EndProcedure  \end{algorithmic}
+\end{algorithm}
+
+\section{User/Domain Functions}
+
+The user/domain functions are those that customize the simulation to the user's specific case, and, in-general, are the following functions:
+\begin{itemize}
+\item \textbf{User\_PreStep} - Proper function passed to and called by the library-provided \textit{Stepper} before a time integration step is performed.
+\item \textbf{User\_RHS} - Proper function passed to and called by the library-probided \textit{TimeIntegrator}. The \textbf{User\_RHS} function provides the time-rate-of-change for the conserved quantities used by the \textit{TimeIntegrator} to advance the state forward in time.
+\item \textbf{User\_PostStep} - Proper function passed to and called by the library-provided \textit{Stepper} after a time integration step is completed, and before the next time integration step.
+\end{itemize}
+
+\subsection{RHS}
+%----------------------------
+%User_RHS(t, [CV, tseed]):
+%   DV, TV = EOS(CV, tseed) # get real dependent/transport 
+%   # fluid_state := [CV, DV, TV]
+%   fluid_states_qbnd = [[cv, dv, tv]] # pre-project to quadrature/boundaries
+%   # Note: tseed RHS set to 0
+%   return [CNS(t, fluid_states_qbnd) + AV(t, fluid_states_qbnd) + Sources(t, fluid_states_qbn%d), 0]
+%----------------------------
+\begin{algorithm}
+  \caption{User's RHS Function}
+  \begin{algorithmic}[1]
+    \Procedure{RHS}{$t, S$}
+    \State $[CV, Tseed] \gets S$
+    \State $DV \gets \Call{EOS}{CV, Tseed}$
+    \State $TV \gets \Call{Transport}{CV, DV}$
+    \State $\Psi \gets [CV, DV, TV]$ \Comment forms fluid state $\Psi$
+    \State $[\Psi_q] \gets \Call{Project}{\Psi}$\Comment project $\Psi$ to quadrature/boundaries
+    \State \Return $[\Sigma\Call{Op}{t, [\Psi_q]} + \Sigma\Call{Sources}{t, [\Psi_q]}, 0]$ \Comment Note Tseed RHS = 0
+    \EndProcedure  \end{algorithmic}
+\end{algorithm}
+
+The function(s) \textit{Op} may include the compressible Navier-Stokes operator, artificial viscosity, etc. \textit{Sources} would include production rates for reactant and product mixture species, and possibly others.
+
+\subsection{Prestep and Poststep Callbacks}
+The callbacks are user-provided functions where things such as I/O, simulation health checking, and timestep computations are performed. For 
+
+%----------------------------
+%User_PreStep(n, t, dt, [CV, tseed]):
+%   DV = EOS(CV, tseed)
+%   # i/o, health_check, calcuate DT
+%   dt = new_dt(dt, [CV, DV])
+%   (...)
+%   return [CV, tseed], dt
+%----------------------------
+\begin{algorithm}
+  \caption{User's Prestep Callback}
+  \begin{algorithmic}[1]
+    \Procedure{PreStep}{$n, t, dt, S$}
+    \State $[CV, Tseed] \gets S$
+    \State $DV \gets \Call{EOS}{CV, Tseed}$
+    \State $TV \gets \Call{Transport}{CV, DV}$
+    \State $\Psi \gets [CV, DV, TV]$ \Comment forms fluid state $\Psi$
+    \State $dt \gets \Call{SimTimestep}{t, t_{final}, dt, \Psi}$
+    \Statex $ ( ... )$ \Comment I/O, Health, etc
+    \State \Return $[S, dt]$
+    \EndProcedure  \end{algorithmic}
+\end{algorithm}
+
+%----------------------------
+%User_PostStep(n, t, dt, [CV, tseed]):
+%   DV = EOS(CV, tseed)
+%   tseed = DV.temperature
+%   return [CV, tseed], dt
+%----------------------------
+\begin{algorithm}
+  \caption{User's Poststep Callback}
+  \begin{algorithmic}[1]
+    \Procedure{PostStep}{$n, t, dt, S$}
+    \State $[CV, Tseed] \gets S$
+    \State $DV \gets \Call{EOS}{CV, Tseed}$
+    \State $Tseed \gets DV.temperature$
+    \State $S \gets [CV, Tseed]$ \Comment Updates temperature seed
+    \State \Return $[S, dt]$
+    \EndProcedure  \end{algorithmic}
+\end{algorithm}
+
+
+\section{Species Limited Versions}
+In the current version of the algorithms with species mass-fraction-limited, no change to the library-provided infrastructure are required.  The current \textit{LimitSpecies} function restricts the species mass fractions to $[0, 1]$ and calculates a source term designed to help drag the running fluid state back to a state such that the species mass fractions $Y_\alpha \in [0, 1]$.  The changes to support this limiting are restricted to the main user-provided constructs, which are modified as follows:
+
+
+%User_RHS(t, [CV, tseed]):
+%   DV, TV = EOS(CV, tseed) # get real dependent/transport
+%   CV_l, LimitSource = Limit(CV, DV)
+%   CV := CV_l  (reset CV to be the limited version)
+%
+%   DV, TV = EOS(CV, DV.temperature) # seeded with DV's temp
+%   # fluid_state := [CV, DV, TV]
+%   fluid_states_qbnd = [[cv, dv, tv]] # pre-project to quadrature/boundaries
+%   # Note: tseed RHS set to 0
+%   # Sources includes species production rates
+%   return [CNS(t, fluid_states_qbnd) + AV(t, fluid_states_qbnd) + Sources(t, fluid_states_qbnd) + LimitSource, 0]
+\begin{algorithm}
+  \caption{User's RHS Function w/Species Limiting}
+  \begin{algorithmic}[1]
+    \Procedure{RHS}{$t, S$}
+    \State $[CV, Tseed] \gets S$
+    \State $DV \gets \Call{EOS}{CV, Tseed}$
+    \State $TV \gets \Call{Transport}{CV, DV}$
+    \State $CV, L_s \gets \Call{LimitSpecies}{CV, DV}$\Comment gets limited CV and source
+ 
+    \State $DV \gets \Call{EOS}{CV, DV.temperature}$
+    \State $TV \gets \Call{Transport}{CV, DV}$
+    \State $\Psi \gets [CV, DV, TV]$ \Comment forms fluid state $\Psi$
+    \State $[\Psi_q] \gets \Call{Project}{\Psi}$\Comment project $\Psi$ to quadrature/boundaries
+    \State \Return $[\Sigma\Call{Op}{t, [\Psi_q]} + \Sigma\Call{Sources}{t, [\Psi_q]} + L_s, 0]$
+    \EndProcedure  \end{algorithmic}
+\end{algorithm}
+
+%User_Prestep(n, t, dt, [CV, tseed]):
+%   DV = EOS(CV, tseed)
+%   CV_l, LimitSource = Limit(CV, DV)
+%   CV := CV_l  (reset CV to be the limited version)
+%
+%   DV = EOS(CV, tseed)
+%   # i/o, health_check, calcuate DT
+%   dt = new_dt(dt, [CV, DV])
+%   (...)
+%   return [CV, tseed], dt
+%
+\begin{algorithm}
+  \caption{User's Prestep Callback}
+  \begin{algorithmic}[1]
+    \Procedure{PreStep}{$n, t, dt, S$}
+    \State $[CV, Tseed] \gets S$
+    \State $DV \gets \Call{EOS}{CV, Tseed}$
+    \State $TV \gets \Call{Transport}{CV, DV}$
+    \State $CV, L_s \gets \Call{LimitSpecies}{CV, DV}$
+ 
+    \State $DV \gets \Call{EOS}{CV, DV.temperature}$
+    \State $TV \gets \Call{Transport}{CV, DV}$    
+    \State $\Psi \gets [CV, DV, TV]$ \Comment forms fluid state $\Psi$
+    \State $dt \gets \Call{SimTimestep}{t, t_{final}, dt, \Psi}$
+    \Statex $ ( ... )$ \Comment I/O, Health, etc
+    \State \Return $[S, dt]$
+    \EndProcedure  \end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}
+  \caption{User's Poststep Callback}
+  \begin{algorithmic}[1]
+    \Procedure{PostStep}{$n, t, dt, S$}
+    \State $[CV, Tseed] \gets S$
+    \State $DV \gets \Call{EOS}{CV, Tseed}$
+    \State $CV, L_s \gets \Call{LimitSpecies}{CV, DV}$
+
+    \State $DV \gets \Call{EOS}{CV, DV.temperature}$
+    \State $Tseed \gets DV.temperature$
+    \State $S \gets [CV, Tseed]$ \Comment Updates temperature seed
+    \State \Return $[S, dt]$
+    \EndProcedure  \end{algorithmic}
+\end{algorithm}
+
+\end{document}
+
+% ------- SPECIES LIMITED VERSIONS ------------
+
+
+%User_Poststep(n, t, dt, [CV, tseed]):
+%   DV = EOS(CV, tseed)
+%   CV_l, LimitSource = Limit(CV, DV)
+%   CV := CV_l  (reset CV to be the limited version)
+%
+%   DV = EOS(CV, tseed)
+%   tseed = DV.temperature
+%   return [CV, tseed], dt
+
