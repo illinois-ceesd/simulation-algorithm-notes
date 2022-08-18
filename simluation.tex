@@ -286,7 +286,7 @@ As currently implemented, the limiter function acts as a sort of filter on the c
     \State $Ysum \gets \Sigma_\alpha{Ylim_\alpha}$
     \State $Ynew_\alpha \gets Ylim_\alpha / Ysum$
     \State $CV.dens \gets \Call{EOS.density}{DV, Ynew_\alpha}$
-    \State $CV.spec_mass \gets CV.dens * Ynew_\alpha$
+    \State $CV.spec\_mass \gets CV.dens * Ynew_\alpha$
     \State $ie \gets \Call{EOS.energy}{DV, Ynew_\alpha}$
     \State $CV.energy = CV.dens * (ke + ie)$
     \State $CV.mom = CV.dens * vel$
