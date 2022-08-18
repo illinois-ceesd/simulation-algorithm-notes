@@ -182,10 +182,9 @@ The callbacks are user-provided functions where things such as I/O, simulation h
 \section{Species Limited Versions}
 In the current version of the algorithms with species mass-fraction-limited, no change to the library-provided infrastructure are required.  The current \textit{LimitSpecies} function restricts the species mass fractions to $[0, 1]$ and calculates a source term designed to help drag the running fluid state back to a state such that the species mass fractions $Y_\alpha \in [0, 1]$.  The changes to support this limiting are restricted to the main user-provided constructs, which are modified as follows:
 
-
 %User_RHS(t, [CV, tseed]):
 %   DV, TV = EOS(CV, tseed) # get real dependent/transport
-%   CV_l, LimitSource = Limit(CV, DV)
+%   CV_l, Limiter = Limit(CV, DV)
 %   CV := CV_l  (reset CV to be the limited version)
 %
 %   DV, TV = EOS(CV, DV.temperature) # seeded with DV's temp
@@ -193,7 +192,7 @@ In the current version of the algorithms with species mass-fraction-limited, no 
 %   fluid_states_qbnd = [[cv, dv, tv]] # pre-project to quadrature/boundaries
 %   # Note: tseed RHS set to 0
 %   # Sources includes species production rates
-%   return [CNS(t, fluid_states_qbnd) + AV(t, fluid_states_qbnd) + Sources(t, fluid_states_qbnd) + LimitSource, 0]
+%   return [CNS(t, fluid_states_qbnd) + AV(t, fluid_states_qbnd) + Sources(t, fluid_states_qbnd) + Limiter, 0]
 \begin{algorithm}
   \caption{User's RHS Function w/Species Limiting}
   \begin{algorithmic}[1]
@@ -201,19 +200,19 @@ In the current version of the algorithms with species mass-fraction-limited, no 
     \State $[CV, Tseed] \gets S$
     \State $DV \gets \Call{EOS}{CV, Tseed}$
     \State $TV \gets \Call{Transport}{CV, DV}$
-    \State $CV, L_s \gets \Call{LimitSpecies}{CV, DV}$\Comment gets limited CV and source
+    \State $CV \gets \Call{Limiter}{CV, DV}$\Comment gets limited CV and source
  
     \State $DV \gets \Call{EOS}{CV, DV.temperature}$
     \State $TV \gets \Call{Transport}{CV, DV}$
     \State $\Psi \gets [CV, DV, TV]$ \Comment forms fluid state $\Psi$
     \State $[\Psi_q] \gets \Call{Project}{\Psi}$\Comment project $\Psi$ to quadrature/boundaries
-    \State \Return $[\Sigma\Call{Op}{t, [\Psi_q]} + \Sigma\Call{Sources}{t, [\Psi_q]} + L_s, 0]$
+    \State \Return $[\Sigma\Call{Op}{t, [\Psi_q]} + \Sigma\Call{Sources}{t, [\Psi_q]}, 0]$
     \EndProcedure  \end{algorithmic}
 \end{algorithm}
 
 %User_Prestep(n, t, dt, [CV, tseed]):
 %   DV = EOS(CV, tseed)
-%   CV_l, LimitSource = Limit(CV, DV)
+%   CV_l, Limiter = Limit(CV, DV)
 %   CV := CV_l  (reset CV to be the limited version)
 %
 %   DV = EOS(CV, tseed)
@@ -221,15 +220,14 @@ In the current version of the algorithms with species mass-fraction-limited, no 
 %   dt = new_dt(dt, [CV, DV])
 %   (...)
 %   return [CV, tseed], dt
-%
 \begin{algorithm}
-  \caption{User's Prestep Callback}
+  \caption{User's Prestep Callback w/Species Limiting}
   \begin{algorithmic}[1]
     \Procedure{PreStep}{$n, t, dt, S$}
     \State $[CV, Tseed] \gets S$
     \State $DV \gets \Call{EOS}{CV, Tseed}$
     \State $TV \gets \Call{Transport}{CV, DV}$
-    \State $CV, L_s \gets \Call{LimitSpecies}{CV, DV}$
+    \State $CV \gets \Call{Limiter}{CV, DV}$
  
     \State $DV \gets \Call{EOS}{CV, DV.temperature}$
     \State $TV \gets \Call{Transport}{CV, DV}$    
@@ -240,13 +238,21 @@ In the current version of the algorithms with species mass-fraction-limited, no 
     \EndProcedure  \end{algorithmic}
 \end{algorithm}
 
+%User_Poststep(n, t, dt, [CV, tseed]):
+%   DV = EOS(CV, tseed)
+%   CV_l, Limiter = Limit(CV, DV)
+%   CV := CV_l  (reset CV to be the limited version)
+%
+%   DV = EOS(CV, tseed)
+%   tseed = DV.temperature
+%   return [CV, tseed], dt
 \begin{algorithm}
-  \caption{User's Poststep Callback}
+  \caption{User's Poststep Callback w/Species Limiting}
   \begin{algorithmic}[1]
     \Procedure{PostStep}{$n, t, dt, S$}
     \State $[CV, Tseed] \gets S$
     \State $DV \gets \Call{EOS}{CV, Tseed}$
-    \State $CV, L_s \gets \Call{LimitSpecies}{CV, DV}$
+    \State $CV \gets \Call{Limiter}{CV, DV}$
 
     \State $DV \gets \Call{EOS}{CV, DV.temperature}$
     \State $Tseed \gets DV.temperature$
@@ -255,17 +261,40 @@ In the current version of the algorithms with species mass-fraction-limited, no 
     \EndProcedure  \end{algorithmic}
 \end{algorithm}
 
+\subsection{Species Limiter Function}
+
+The aim of this new function is to limit the mixture species mass fractions $Y_\alpha$ to the sensical range $[0, 1]$, and also to ensure the mass fractions remain in a physically realizable state, i.e., that $\sigma{Y_\alpha} = 1$.  The intent is to do this while not perturbing the characteristics of the flow, that is, without perturbing the fluid velocity, pressure, or temperature, which drive the flow.
+
+As currently implemented, the limiter function acts as a sort of filter on the conserved quantities, producing a new vector of conserved quantities which respect the conditions outlined above.  
+%   Limiter(CV, DV):
+%         [limited_y] = bnd_preserving_limiter(0, 1, cv.y)
+%         y_sum = sum([limited_y])
+%         y_new = [limited_y]/y_sum
+%         cv.density = EOS(DV, y_new)  # new density
+%         cv.spec_mass = cv.density*y_new
+%         ener_new = EOS(DV, y_new)
+%         kin_ener = cv.density/2 * (velocity.velocity) 
+%         cv.energy = kin_ener + cv.density*EOS(DV, y_new)
+%        return CV
+\begin{algorithm}
+  \caption{User's Limiter Function}
+  \begin{algorithmic}[1]
+    \Procedure{Limiter}{CV, DV}
+    \State $vel \gets CV.mom / CV.mass$
+    \State $ke \gets \frac{1}{2}({vel}\cdot{vel})$
+    \State $Ylim_\alpha \gets \Call{BPLimiter}{0, 1, CV.Y}$
+    \State $Ysum \gets \Sigma_\alpha{Ylim_\alpha}$
+    \State $Ynew_\alpha \gets Ylim_\alpha / Ysum$
+    \State $CV.dens \gets \Call{EOS.density}{DV, Ynew_\alpha}$
+    \State $CV.spec_mass \gets CV.dens * Ynew_\alpha$
+    \State $ie \gets \Call{EOS.energy}{DV, Ynew_\alpha}$
+    \State $CV.energy = CV.dens * (ke + ie)$
+    \State $CV.mom = CV.dens * vel$
+    \State \Return $CV$
+    \EndProcedure  \end{algorithmic}
+\end{algorithm}
+
 \end{document}
 
-% ------- SPECIES LIMITED VERSIONS ------------
 
-
-%User_Poststep(n, t, dt, [CV, tseed]):
-%   DV = EOS(CV, tseed)
-%   CV_l, LimitSource = Limit(CV, DV)
-%   CV := CV_l  (reset CV to be the limited version)
-%
-%   DV = EOS(CV, tseed)
-%   tseed = DV.temperature
-%   return [CV, tseed], dt
 
